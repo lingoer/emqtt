@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -66,13 +66,15 @@
 
 %% For test cases
 -export([ pause/1
-	, resume/1
-	]).
+        , resume/1
+        ]).
 
 -export([ initialized/3
         , waiting_for_connack/3
         , connected/3
         , inflight_full/3
+        , random_client_id/0
+        , reason_code_name/1
         ]).
 
 -export([ init/1
@@ -81,6 +83,7 @@
         , terminate/3
         , code_change/4
         ]).
+
 
 -export_type([ host/0
              , option/0
@@ -135,19 +138,18 @@
 -type(maybe(T) :: undefined | T).
 -type(topic() :: binary()).
 -type(payload() :: iodata()).
--type(packet_id() :: 0..16#FF).
+-type(packet_id() :: 0..16#FFFF).
 -type(reason_code() :: 0..16#FF).
 -type(properties() :: #{atom() => term()}).
 -type(version() :: ?MQTT_PROTO_V3
-      		 | ?MQTT_PROTO_V4
-		 | ?MQTT_PROTO_V5).
+                 | ?MQTT_PROTO_V4
+                 | ?MQTT_PROTO_V5).
 -type(qos() :: ?QOS_0 | ?QOS_1 | ?QOS_2).
 -type(qos_name() :: qos0 | at_most_once |
                     qos1 | at_least_once |
                     qos2 | exactly_once).
 -type(pubopt() :: {retain, boolean()}
-      		| {qos, qos() | qos_name()}
-		| {timeout, timeout()}).
+                | {qos, qos() | qos_name()}).
 -type(subopt() :: {rh, 0 | 1 | 2}
                 | {rap, boolean()}
                 | {nl,  boolean()}
@@ -206,6 +208,7 @@
 
 %% Default timeout
 -define(DEFAULT_KEEPALIVE, 60).
+-define(DEFAULT_RETRY_INTERVAL, 30000).
 -define(DEFAULT_ACK_TIMEOUT, 30000).
 -define(DEFAULT_CONNECT_TIMEOUT, 60000).
 
@@ -323,7 +326,9 @@ parse_subopt([{nl, true} | Opts], Result) ->
 parse_subopt([{nl, false} | Opts], Result) ->
     parse_subopt(Opts, Result#{nl := 0});
 parse_subopt([{qos, QoS} | Opts], Result) ->
-    parse_subopt(Opts, Result#{qos := ?QOS_I(QoS)}).
+    parse_subopt(Opts, Result#{qos := ?QOS_I(QoS)});
+parse_subopt([_ | Opts], Result) ->
+    parse_subopt(Opts, Result).
 
 -spec(publish(client(), topic(), payload()) -> ok | {error, term()}).
 publish(Client, Topic, Payload) when is_binary(Topic) ->
@@ -473,7 +478,7 @@ init([Options]) ->
                                  properties      = #{},
                                  auto_ack        = true,
                                  ack_timeout     = ?DEFAULT_ACK_TIMEOUT,
-                                 retry_interval  = 0,
+                                 retry_interval  = ?DEFAULT_RETRY_INTERVAL,
                                  connect_timeout = ?DEFAULT_CONNECT_TIMEOUT,
                                  last_packet_id  = 1
                                 }),
@@ -1118,8 +1123,9 @@ timeout_calls(Timeout, Calls) ->
 timeout_calls(Now, Timeout, Calls) ->
     lists:foldl(fun(C = #call{from = From, ts = Ts}, Acc) ->
                     case (timer:now_diff(Now, Ts) div 1000) >= Timeout of
-                        true  -> From ! {error, ack_timeout},
-                                 Acc;
+                        true  ->
+                            gen_statem:reply(From, {error, ack_timeout}),
+                            Acc;
                         false -> [C | Acc]
                     end
                 end, [], Calls).
@@ -1186,7 +1192,7 @@ deliver(#mqtt_msg{qos = QoS, dup = Dup, retain = Retain, packet_id = PacketId,
 
 eval_msg_handler(#state{msg_handler = ?NO_MSG_HDLR,
                         owner = Owner},
-                 disconnected, {ReasonCode, Properties}) ->
+                 disconnected, {ReasonCode, Properties}) when is_integer(ReasonCode) ->
     %% Special handling for disconnected message when there is no handler callback
     Owner ! {disconnected, ReasonCode, Properties},
     ok;

@@ -17,7 +17,9 @@ logs/
 cover/
 .DS_Store
 _build/
+_packages/
 rebar3.crashdump
 *.swp
 rebar.lock
 emqtt.app.src
+emqtt_cli

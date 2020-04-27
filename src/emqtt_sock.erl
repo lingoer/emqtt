@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 
 -export([ connect/4
         , send/2
+        , recv/2
         , close/1
         ]).
 
@@ -44,7 +45,7 @@
       -> {ok, socket()} | {error, term()}).
 connect(Host, Port, SockOpts, Timeout) ->
     TcpOpts = merge_opts(?DEFAULT_TCP_OPTIONS,
-			 lists:keydelete(ssl_opts, 1, SockOpts)),
+                         lists:keydelete(ssl_opts, 1, SockOpts)),
     case gen_tcp:connect(Host, Port, TcpOpts, Timeout) of
         {ok, Sock} ->
             case lists:keyfind(ssl_opts, 1, SockOpts) of
@@ -76,6 +77,13 @@ send(Sock, Data) when is_port(Sock) ->
     end;
 send(#ssl_socket{ssl = SslSock}, Data) ->
     ssl:send(SslSock, Data).
+
+-spec(recv(socket(), non_neg_integer())
+      -> {ok, iodata()} | {error, closed | inet:posix()}).
+recv(Sock, Length) when is_port(Sock) ->
+    gen_tcp:recv(Sock, Length);
+recv(#ssl_socket{ssl = SslSock}, Length) ->
+    ssl:recv(SslSock, Length).
 
 -spec(close(socket()) -> ok).
 close(Sock) when is_port(Sock) ->
